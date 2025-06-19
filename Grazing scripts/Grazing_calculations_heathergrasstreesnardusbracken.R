@@ -113,24 +113,25 @@ biomass <- datasheetSpatRaster(
 
 
 #read in files - NB these can/should all be read in from St-SIM later on, reading straight in now whilst developing script - IGNORE later on
-inputRaster <- terra::rast("C:/Local data/Modelling/Pratice landscapes/Heather wood grass/heatherwoodgrass_habitats_simp.tif") #habitat IDs
-management_rast <- terra::rast("C:/Local data/Modelling/Pratice landscapes/Heather wood grass/management_model.tif") #management rasters: for hefts and tree-planting exclosures
-ecozone_rast <- terra::rast("C:/Local data/Modelling/Pratice landscapes/Heather wood grass/ecozone.tif") #tells you ecozones
-NPP <- rast("C:/Local data/Modelling/Pratice landscapes/Heather wood grass/NPP_hwg2.tif")
+inputRaster <- terra::rast("C:/Local data/Modelling/Pratice landscapes/Heather wood u4 molina nardus/habitats_heather_grasses_wood_bracken.tif") #habitat IDs
+management_rast <- terra::rast("C:/Local data/Modelling/Pratice landscapes/Heather wood u4 molina nardus/heather_management_large.tif") #management rasters: for hefts and tree-planting exclosures
+ecozone_rast <- terra::rast("C:/Local data/Modelling/Pratice landscapes/Heather wood u4 molina nardus/ecozone_heatherlarge.tif") #tells you ecozones
+NPP <- rast("C:/Local data/Modelling/Pratice landscapes/Heather wood u4 molina nardus/NPP.tif")
 # #this tells me annual DM production according to habitat and ecozone. NB: IN g/10x10m2 cell. Based on figures from Armstrong et al (1997a)
-biomass  <- rast("C:/Local data/Modelling/Pratice landscapes/Heather wood grass/Initialbiomass_variablehwg.tif") #read in existing standing biomass for a cell: NPP plus existing biomass
+biomass  <- rast("C:/Local data/Modelling/Pratice landscapes/Heather wood u4 molina nardus/Initialbiomass_variable.tif") #read in existing standing biomass for a cell: NPP plus existing biomass
 
 ## Defining some constants used below - can be changed/added to depending on the stocking calendar used, when more habitats are added in etc.
 days_in_month  <- c(31,28,31,30,31,30,31,31,30,31,30,31)
 graze_months   <- 5:9                    # May–Sept currently only months grazed in model
-utilisation_cap<- 0.50                  # 50 % of standing pool can be removed
+utilisation_cap<- 0.50                  # 50 % of standing pool can be removed (Armonstrong et al, max % of diet that is dead biomass throughout year)
 digest_grass   <- 0.66                  # U4 Festuca-agrostis live grass digestibility (fraction) - from Armstrong et al. NB: taken as an average across the year
 digest_heather <- 0.46                  # heather digestibility (fraction) - from Armstrong et al. NB: currently as an average taken across the year
-digest_molinia <- 0.53                  #molinia digestability (fraction) from Armstrong et al. NB: currently as an average taken across the year
+#digest_molinia <- 0.53                  #molinia digestability (fraction) from Armstrong et al. NB: currently as an average taken across the year
 digest_nardus <- 0.43                   #nardus digestability (fraction) from Humperheries et al (2015)
-W_kg           <- 40                    # average Herwick ewe mass - change if grazing with Swaledales too (significantly heavier)
+W_kg           <- 43                    # average Herwick ewe mass - change if grazing with Swaledales too (significantly heavier)
 W075           <- W_kg^0.75             # metabolic weight for average Herdwick
-ID_grass       <- function(D) 166.6*D - 43.6      # Armstrong eqn for daily dry matter intake from grass per ewe (g kg^-0.75 d^-1)
+ID_grass       <- function(D) 166.6*D - 43.6      # Armstrong eqn for potential daily dry matter intake from grass per ewe (g kg^-0.75 d^-1)
+ID_heather <- function(D) 66.8*DH - 2.17 
 phys_cap_g_day <- ID_grass(digest_grass) * W075   # Total potential daily intake from grass, again from Armstrong et al  (g DM day^-1)
 ddm_req_g_day  <- phys_cap_g_day * digest_grass   # Daily digestible DM requirement for maintenance of ewe (g/day)
 
@@ -160,18 +161,21 @@ safe_div <- function(num, den){
 frac_heather <- c(0,0,0,0, 0.081,0.325,0.532,0.062, 0,0,0,0)
 frac_u4grass <- c(0.013,0.015,0.037,0.067,0.115,0.135,
                   0.288,0.148,0.068,0.060,0.034,0.020)
-frac_molinia <- c(0,0,0,0.006,0.072,0.303,0.619,0,0,0,0,0)
+#frac_molinia <- c(0,0,0,0.006,0.072,0.303,0.619,0,0,0,0,0)
 frac_nardus <- c(0,0,0,0,0.1,0.3,0.3,0.3,0,0,0)
+frac_bracken <- c(0.013,0.015,0.037,0.067,0.115,0.115,
+                  0,0,0,0.060,0.034,0.020) #NB, this assumes U4 grassland under bracken, but that this is only accessible/grows until mid June when bracken becomes too dense
 
 #masks raster for each habitat
 mask_u4  <- inputRaster == 3      # TRUE where habitat == 3
 mask_heath<- inputRaster == 14     # TRUE where habitat == 14
 mask_ywood <- inputRaster == 12
 mask_mwood <- inputRaster == 10
-mask_U6 <- inputRaster == 23
+#mask_U6 <- inputRaster == 23
 mask_U5 <-inputRaster == 5
+mask_bracken <- inputRaster == 2
 
-mask_U4grasslike <- mask_u4 | mask_ywood | mask_mwood #includes young and mature woodland, assuming the ground flora in woodlands are similar to grasslands
+mask_heathlike <- mask_heath | mask_ywood | mask_mwood #includes young and mature woodland, assuming the ground flora in woodlands are similar to grasslands
 
 #loop over 12 months, where each habitat type is masked, multiplied by correct habitat fraction, then rasters are written to disk/saved
 monthly_rasters <- vector("list", 12)
@@ -182,12 +186,13 @@ for (m in 1:12) {
   ## Cells that were neither heather nor U4 are 0; keeps zeros for U4 & heather cells but still masks non-habitat
   frac_rast <-  mask_heath * frac_heather[m] +
   mask_u4   * frac_u4grass[m] +
-  mask_ywood   * frac_u4grass[m] +
-  mask_mwood   * (frac_u4grass[m] * 0.5) + #NB the fraction here should be tested in sensitivity analysis. Basically assuming how much grassland coverage there is in woodland compared to grassland
-  mask_U6 * (frac_molinia) +
-  mask_U5 * (frac_nardus)
+  mask_ywood   * frac_heather[m] +
+  mask_mwood   * (frac_heather[m] * 0.5) + #NB the fraction here should be tested in sensitivity analysis. Basically assuming how much grassland coverage there is in woodland compared to grassland
+  #mask_U6 * (frac_molinia) +
+  mask_U5 * frac_nardus[m] +
+  mask_bracken * frac_bracken[m]
   
-  frac_rast <- ifel(mask_u4 | mask_U4grasslike, frac_rast, NA)
+  #frac_rast <- ifel(mask_u4 | mask_heathlike, frac_rast, NA)
   
   ## Convert annual NPP (g/cell) to this month’s growth
   npp_month <- NPP * frac_rast
@@ -216,12 +221,12 @@ grazing_preference <- classify(inputRaster, rcl = matrix(c(
   14,  0.5, #heathland, assuming all mature
   12, 0.5, #young woodland assumed to be...
   10, 0.3, #mature woodland
-  5, 0.1, # Nardus - least palatable
-  23, 0.5 #molinia, assumed to be as palatable as heather (in the short period it produces biomass)
+  5, 0.1 # Nardus - least palatable
+  #23, 0.5 #molinia, assumed to be as palatable as heather (in the short period it produces biomass)
 ), ncol=2, byrow=TRUE))
 
-## Local sum of attractiveness (within 50 m radius, 5 cells)
-focal_weights <- terra::focalMat(grazing_preference, 50, type = "circle")
+## Local sum of attractiveness (within 100 m radius, 10 cells)
+focal_weights <- terra::focalMat(grazing_preference, 100, type = "circle")
 local_pressure <- focal(grazing_preference, w = focal_weights, fun = sum, na.policy="omit", na.rm=TRUE)
 
 # Assign overall density per area: 1 ewe/ha = 0.01 per 100m² cell, 0.6 ewes/ha = 0.006 per cell
@@ -277,8 +282,9 @@ plot(sheep_density)
 ## --------------------------------------------------------------------------
 ## digestibility map (creates a raster of digestibility per pixel, combining different habitat types with their digestibility coefficients)
 digest_rast <- mask_u4 * digest_grass + 
-  mask_heath * digest_heather 
- # mask_U5 * digest_nardus +
+  mask_heathlike * digest_heather +
+  mask_U5 * digest_nardus +
+  mask_bracken * digest_grass
   #mask_U6 * digest_molinia
 
 # live-growth buffers (0, 1, 2, 3-month): basically keeping track of NPP stocks available for grazing, assuming only three month's worth of NPP are 'live'
@@ -311,7 +317,7 @@ for (m in graze_months) {
   live_before <- live0 + live1 + live2 + live3
   
   ## 2. Calculate per-cell sheep dry matter need and physical intake capacity, based on sheep density and days in the month
-  ddm_need <- sheep_density * ddm_req_g_day  * days #total dry matter requirement for maintence of flock
+  ddm_need <- sheep_density * ddm_req_g_day  * days #total dry matter requirement for maintainence of flock
   phys_cap <- sheep_density * phys_cap_g_day * days #most that can be eaten (physical cap)
   ddm_need[is.na(ddm_need)] <- 0
   phys_cap[is.na(phys_cap)] <- 0
@@ -367,9 +373,9 @@ for (m in graze_months) {
   ## 8. Satisfying unmet demand remaining after all grazing attempts - redistribute unmet demand to next closest cell with 'spare' capacity 
   unmet_ddm <- ddm_need
   surplus_pool <- live0 + live1 + live2 + live3
-  redistribute_window <- focalMat(surplus_pool, radius = 30, type = "circle")
+  redistribute_window <- terra::focalMat(surplus_pool, 30, "circle")
   redistributed_demand <- terra::focal(unmet_ddm, w = redistribute_window, fun = mean, na.policy = "omit", na.rm = TRUE)
-  can_take <- pmin(surplus_pool, redistributed_demand)
+  can_take <- rmin2(surplus_pool, redistributed_demand)
   total_surplus <- surplus_pool + 1e-6
   take0_extra <- can_take * (live0 / total_surplus)
   take1_extra <- can_take * (live1 / total_surplus)
